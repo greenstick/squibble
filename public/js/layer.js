@@ -28,7 +28,8 @@ Layer.prototype = {
 		layer.object,
         layer.offsetX,
         layer.offsetY,
-        layer.context;
+        layer.context,
+        layer.activeCurve;
 
         // Generate Layer Object & Append to Parent
         layer.generate();
@@ -43,12 +44,39 @@ Layer.prototype = {
 		layer.object.id 		= layer.id,
 		layer.offsetX 			= layer.object.offsetLeft,
 		layer.offsetY 			= layer.object.offsetTop,
-		layer.context 			= layer.object.getContext(layer.contextSetting);
-		layer.object.setAttribute("width", layer.width);
-		layer.object.setAttribute("height", layer.height);
+		layer.context 			= layer.object.getContext(layer.contextSetting),
+		layer.devicePixelRatio 	= window.devicePixelRatio || 1,
+		layer.basePixelRatio 	= layer.context.webkitBackingStorePixelRatio ||
+					              layer.context.mozBackingStorePixelRatio 	 ||
+					              layer.context.msBackingStorePixelRatio 	 ||
+					              layer.context.oBackingStorePixelRatio 	 ||
+					              layer.context.backingStorePixelRatio 		 || 
+					              1,
+	    layer.pixelRatio 		= layer.devicePixelRatio / layer.basePixelRatio;
+		layer.object.setAttribute("width", layer.width * layer.pixelRatio);
+		layer.object.setAttribute("height", layer.height * layer.pixelRatio);
+		layer.object.style.width = layer.width + "px";
+		layer.object.style.height = layer.height + "px";
+		layer.context.setTransform(layer.pixelRatio, 0, 0, layer.pixelRatio, 0, 0);
         layer.object.setAttribute("style", "background-color: " + layer.backgroundColor + ";");
+        layer.object.setAttribute("style", "zoom: " + 1 / layer.pixelRatio + ";")
         layer.container.appendChild(layer.object);
-        layer.curves 			= [new Curve({context: layer.context, layer: layer.object})];
+        layer.curves 			= [];
+
+        console.log(layer.devicePixelRatio);
+
+		return layer;
+	},
+
+	draw 			: function () {
+		var layer = this;
+		// Clear Layer Canvas
+		layer.context.clearRect(0, 0, layer.width, layer.height);
+		// Draw Curves
+		for (var i = 0; i < layer.curves.length; i++) {
+			var curve = layer.curves[i];
+			curve.generate();
+		}
 
 		return layer;
 	},
@@ -59,7 +87,7 @@ Layer.prototype = {
 		// Update Properties
 		layer.width 			= typeof args.width 			=== "number" ? args.width 			: layer.width,
 		layer.height 			= typeof args.height 			=== "number" ? args.height 			: layer.height,
-		layer.backgroundColor   = typeof args.backgroundColor   === "string" ? args.backgroundColor   : layer.backgroundColor;
+		layer.backgroundColor   = typeof args.backgroundColor   === "string" ? args.backgroundColor : layer.backgroundColor;
 		
 		// Reset Context Arguments
 		layer.object.setAttribute("width", args.width);
@@ -69,86 +97,11 @@ Layer.prototype = {
         return layer;
 	},
 
-	strokeStart 	: function (e, offset) {
-		var layer = this,
-			mouseX = e.pageX - offset.left,
-			mouseY = e.pageY - offset.top;
-
-		layer.active = true;
-		layer.addInteraction(mouseX, mouseY, false);
-		layer.refresh();
-		console.log("meow");
-
-		return layer;
-	},
-
-	strokeMove 		: function (e, offset) {
-		var layer = this,
-			mouseX = e.pageX - offset.left,
-			mouseY = e.pageY - offset.top;
-
-		if (layer.active) {
-			layer.addInteraction(mouseX, mouseY, true);
-			layer.refresh();
-		}
-
-		return layer;
-	},
-
-	strokeStop 		: function (e) {
-		var layer = this;
-
-		layer.active = false;
-
-		return layer;
-	},
-
-	addInteraction 	: function (x, y, stroke) {
-		var layer = this;
-
-		layer.interactions.push({
-			x 		: x,
-			y		: y,
-			move 	: stroke,
-			color 	: layer.strokeColor,
-			shape 	: layer.strokeShape,
-			join 	: layer.strokeJoin,
-			width 	: layer.strokeWidth
-		});
-
-		return layer;
-	},
-
-	refresh 		: function () {
-		var layer = this;
-
-		layer.context.clearRect(0, 0, layer.context.width, layer.context.height);
-		for (var i = 0; i < layer.interactions.length; i ++) {
-			var interaction 	= layer.interactions[i],
-				prevInteraction = layer.interactions[i - 1];
-			if (interaction.strokeMove) {
-				layer.context.lineTo(prevInteraction.x, prevInteraction.y, 0, 0, 0, 0);
-			} else {
-				layer.context.moveTo(interaction.x, interaction.y - 1);
-				layer.context.beginPath();
-			}
-			layer.context.lineTo(interaction.x, interaction.y, 0, 0, 0, 0);
-			layer.context.closePath();
-			// Set Stroke Style
-			layer.context.strokeStyle 	= interaction.color;
-			layer.context.lineWidth 	= interaction.width;
-			layer.context.lineJoin 	    = interaction.join;
-			layer.context.lineCap 		= interaction.shape; 
-			layer.context.stroke();
-		}
-
-		return layer;
-	},
-
 	clear  			: function () {
 		var layer = this;
 
 		layer.interactions = [];
+		layer.curves = []
 		layer.context.clearRect(0, 0, context.layer.width, context.layer.height);
 
 		return layer;
@@ -156,26 +109,54 @@ Layer.prototype = {
 
 };
 
+// Create Layer Object
 var layer = new Layer({});
 
-// $("#" + layer.id).on("mousedown", function (e) {
-// 	var offset = $(this).offset();
-// 	console.log(e);
-// 	layer.strokeStart(e, offset);
-// });
+// Select Curve Handle
+$("#" + layer.id).on("mousedown", function (e) {
+	e.stopPropagation();
+	if (layer.curves.length > 0) {
+		for (var i = 0; i < layer.curves.length; i++) {
+			var curve = layer.curves[i];
+			for (var handle in curve.handles) {
+				var dx = (e.offsetX - curve.handles[handle].x),
+					dy = (e.offsetY - curve.handles[handle].y);
+				if ((dx * dx) + (dy * dy) < curve.handles[handle].radius * curve.handles[handle].radius) {
+					layer.activeCurve = curve;
+					layer.activeCurve.selectedHandle = handle,
+					layer.activeCurve.deltaHandle = e,
+					layer.activeCurve.layer.style.cursor = "move"
+					return;
+				}
+			}
+		}
+	}
+});
 
-// $("#" + layer.id).on("mousemove", function (e) {
-// 	var offset = $(this).offset();
-// 	layer.strokeMove(e, offset);
-// });
+// Move Curve Handle / Curve
+$("#" + layer.id).on("mousemove", function (e) {
+	e.stopPropagation();
+	if (layer.curves.length > 0) {
+	    if (layer.activeCurve && layer.activeCurve.selectedHandle && layer.activeCurve.deltaHandle) {
+	    	layer.activeCurve.handles[layer.activeCurve.selectedHandle].x += (e.offsetX - layer.activeCurve.handles[layer.activeCurve.selectedHandle].x);
+			layer.activeCurve.handles[layer.activeCurve.selectedHandle].y += (e.offsetY - layer.activeCurve.handles[layer.activeCurve.selectedHandle].y);
+			layer.activeCurve.deltaHandle = e;
+			layer.draw();
+		}
+	}
+});
 
-// $("#" + layer.id).on("mouseup", function (e) {
-// 	var offset = $(this).offset();
-// 	console.log(e);
-// 	layer.strokeStop(e);
-// });
+// Stop Curve Interaction
+$("#" + layer.id).on("mouseup", function (e) {
+	e.stopPropagation();
+	if (layer.curves.length > 0 && layer.activeCurve) {
+		layer.activeCurve.selectedHandle = null;
+	    layer.activeCurve.layer.style.cursor = "default";
+	    layer.activeCurve.generate();
+	}
+});
 
-// $("#" + layer.id).on("mouseleave", function (e) {
-// 	var offset = $(this).offset();
-// 	layer.strokeStop(e);
-// });
+// Generate Curve
+$("#" + layer.id).on("dblclick", function (e) {
+	 layer.curves.push(new Curve({context: layer.context, layer: layer.object, pixelRatio: layer.pixelRatio}))
+})
